@@ -114,7 +114,10 @@ import {
   exportAllMateriToWord,
   markdownToHtmlForWord,
   exportJadwalToExcel,
-  exportJadwalToWord
+  exportJadwalToWord,
+  exportQuestionsToJSON,
+  exportQuestionsWithImagesZip,
+  parseQuestionsFromJSONFile
 } from './utils/exportUtils';
 import * as XLSX from 'xlsx';
 
@@ -9167,6 +9170,42 @@ PANDUAN EKSTRA:
                     <FileText className="h-4 w-4" />
                     <span>Download Word</span>
                   </button>
+                  <button
+                    onClick={() => {
+                      const targetQuestions = selectedBentukFilter === 'all'
+                        ? questions
+                        : questions.filter(q => {
+                            if (selectedBentukFilter === 'kategori') return isKategoriSoal(q);
+                            if (selectedBentukFilter === 'mcma') return q.bentukSoal === 'mcma';
+                            if (selectedBentukFilter === 'pilihan_ganda_sederhana') return q.bentukSoal === 'pilihan_ganda_sederhana' || (!q.bentukSoal && !isKategoriSoal(q));
+                            return true;
+                          });
+                      exportQuestionsWithImagesZip(targetQuestions, printConfig.subjectName || config.mataPelajaran, printConfig.examName);
+                    }}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+                    title="Download file JSON lengkap beserta semua gambar terpisah dalam format ZIP"
+                  >
+                    <FileCode className="h-4 w-4" />
+                    <span>Download JSON + Gambar (.zip)</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const targetQuestions = selectedBentukFilter === 'all'
+                        ? questions
+                        : questions.filter(q => {
+                            if (selectedBentukFilter === 'kategori') return isKategoriSoal(q);
+                            if (selectedBentukFilter === 'mcma') return q.bentukSoal === 'mcma';
+                            if (selectedBentukFilter === 'pilihan_ganda_sederhana') return q.bentukSoal === 'pilihan_ganda_sederhana' || (!q.bentukSoal && !isKategoriSoal(q));
+                            return true;
+                          });
+                      exportQuestionsToJSON(targetQuestions, printConfig.subjectName || config.mataPelajaran, printConfig.examName);
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+                    title="Download file JSON lengkap beserta data gambar base64"
+                  >
+                    <Code className="h-4 w-4" />
+                    <span>Download JSON</span>
+                  </button>
                   {questions.length > 0 && (
                     <button
                       onClick={handleResequenceQuestionNumbers}
@@ -10348,6 +10387,22 @@ PANDUAN EKSTRA:
                       >
                         <FileSpreadsheet className="h-4 w-4" />
                         <span>Unduh Versi Excel (.xlsx)</span>
+                      </button>
+                      <button
+                        onClick={() => exportQuestionsWithImagesZip(questions, printConfig.subjectName || config.mataPelajaran, printConfig.examName)}
+                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition shadow-lg w-full sm:w-auto justify-center"
+                        title="Unduh file JSON beserta semua folder gambar yang diunggah dalam format ZIP"
+                      >
+                        <FileCode className="h-4 w-4" />
+                        <span>Unduh Paket JSON + Gambar (.zip)</span>
+                      </button>
+                      <button
+                        onClick={() => exportQuestionsToJSON(questions, printConfig.subjectName || config.mataPelajaran, printConfig.examName)}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition shadow-lg w-full sm:w-auto justify-center"
+                        title="Unduh file data JSON lengkap beserta data gambar base64 embedded"
+                      >
+                        <Code className="h-4 w-4" />
+                        <span>Unduh Data JSON (.json)</span>
                       </button>
                     </div>
                   </div>

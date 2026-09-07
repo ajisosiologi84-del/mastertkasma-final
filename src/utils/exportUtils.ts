@@ -1,5 +1,6 @@
 import { KisiKisiItem, Question, JadwalItem } from '../types';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 
 /**
  * Format string helper for bentuk soal
@@ -1226,6 +1227,353 @@ export function exportJadwalToWord(items: JadwalItem[], mataPelajaran: string, p
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Helper to check if an option at index optId ("A", "B", etc.) is marked correct in kunciJawaban
+ */
+function checkOptionIsCorrect(optId: string, optText: string, kunciJawaban: string): boolean {
+  if (!kunciJawaban) return false;
+  const kjUpper = kunciJawaban.toUpperCase().trim();
+  const optIdUpper = optId.toUpperCase();
+
+  // Split kunciJawaban by punctuation or whitespace (e.g., "A", "A, B", "A, B, E")
+  const tokens = kjUpper.split(/[\s,;]+/).map(t => t.replace(/[^A-Z0-9]/g, '')).filter(Boolean);
+  if (tokens.includes(optIdUpper)) {
+    return true;
+  }
+
+  // Check if kunciJawaban starts with the option id e.g. "A." or "A)"
+  if (kjUpper.startsWith(optIdUpper + '.') || kjUpper.startsWith(optIdUpper + ')')) {
+    return true;
+  }
+
+  // Exact text match
+  if (optText && kjUpper === optText.toUpperCase().trim()) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Format options list into CBT Guru structure [{id: "A", text: "...", isCorrect: true}, ...]
+ */
+function buildCbtOptions(q: Question) {
+  if (!q.opsi || !Array.isArray(q.opsi) || q.opsi.length === 0) {
+    return [];
+  }
+
+  return q.opsi.map((optText, i) => {
+    const optId = String.fromCharCode(65 + i); // "A", "B", "C", "D", "E"
+    let cleanText = (optText || '').trim();
+
+    // Strip leading "A. ", "a. ", "A) " if present
+    const prefixRegex = new RegExp(`^${optId}[.\\)\\s]\\s*`, 'i');
+    cleanText = cleanText.replace(prefixRegex, '').trim();
+
+    const isCorrect = checkOptionIsCorrect(optId, cleanText, q.kunciJawaban || '');
+
+    return {
+      id: optId,
+      text: cleanText,
+      isCorrect: isCorrect
+    };
+  });
+}
+
+/**
+ * Export Questions + Embedded Images to JSON file (.json) in CBT Guru format
+ */
+export function exportQuestionsToJSON(
+  questions: Question[],
+  mataPelajaran: string = 'Sosiologi',
+  examName: string = 'Penilaian Akhir Semester',
+  authorCode: string = 'GURU01'
+) {
+  if (!questions || questions.length === 0) {
+    alert("Belum ada butir soal yang dapat diunduh dalam format JSON.");
+    return;
+  }
+
+  const hasImages = questions.some(q => Boolean(q.gambarUrl));
+
+  const exportData = {
+    format: "CBT_GURU_BANK_SOAL_JSON_FULL",
+    version: "2.0",
+    exportedAt: new Date().toISOString(),
+    author: authorCode || "GURU01",
+    kodeGuru: authorCode || "GURU01",
+    mapel: mataPelajaran || "Sosiologi",
+    totalQuestions: questions.length,
+    hasImages: hasImages,
+    questions: questions.map((q, idx) => {
+      const qNum = q.noSoal || (idx + 1);
+
+      // Map bentukSoal to standard CBT string
+      let bentukStr = "Pilihan Ganda";
+      if (q.bentukSoal === 'mcma') {
+        bentukStr = "Pilihan Ganda Kompleks";
+      } else if (q.bentukSoal === 'kategori') {
+        bentukStr = "Pilihan Ganda Kompleks Kategori";
+      } else if (q.bentukSoal === 'uraian' || q.bentukSoal === 'esai') {
+        bentukStr = "Uraian";
+      }
+
+      // Format question text (including stimulus if available)
+      let questionText = (q.soal || '').trim();
+      if (q.stimulus && q.stimulus.trim()) {
+        questionText = `${q.stimulus.trim()}<br/><br/>${questionText}`;
+      }
+
+      const formattedOptions = buildCbtOptions(q);
+
+      return {
+        id: qNum,
+        noSoal: qNum,
+        kodeGuru: authorCode || "GURU01",
+        mapel: mataPelajaran || "Sosiologi",
+        kompetensi: q.kompetensi || q.subKompetensi || "Kompetensi Umum",
+        subTopik: q.subKompetensi || q.kompetensi || "Sub Topik",
+        subKompetensi: q.subKompetensi || "",
+        bentukSoal: bentukStr,
+        poin: 10,
+        question: questionText,
+        soal: q.soal || '',
+        stimulus: q.stimulus || '',
+        image: q.gambarUrl || null,
+        gambarUrl: q.gambarUrl || null,
+        gambarCaption: q.gambarCaption || '',
+        options: formattedOptions,
+        opsi: q.opsi || [],
+        kunciJawaban: q.kunciJawaban || '',
+        explanation: q.pembahasan || '',
+        pembahasan: q.pembahasan || '',
+        isActive: true
+      };
+    })
+  };
+
+  const jsonString = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const safeSubject = (mataPelajaran || 'Soal').replace(/[^a-zA-Z0-9_-]/g, '_');
+  a.download = `Bank_Soal_CBT_${safeSubject}_${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export Questions + Extracted Images in ZIP Package (.zip) with CBT Guru JSON
+ */
+export async function exportQuestionsWithImagesZip(
+  questions: Question[],
+  mataPelajaran: string = 'Sosiologi',
+  examName: string = 'Penilaian Akhir Semester',
+  authorCode: string = 'GURU01'
+) {
+  if (!questions || questions.length === 0) {
+    alert("Belum ada butir soal yang dapat diunduh dalam paket ZIP.");
+    return;
+  }
+
+  const zip = new JSZip();
+  const safeSubject = (mataPelajaran || 'Soal').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const timestamp = new Date().toISOString().slice(0, 10);
+
+  const imagesFolder = zip.folder("gambar_soal");
+  const extractedImagesList: { noSoal: number; filename: string; caption?: string }[] = [];
+
+  const processedQuestions = questions.map((q, idx) => {
+    const qNum = q.noSoal || (idx + 1);
+    let imageFilename: string | null = null;
+
+    if (q.gambarUrl) {
+      let ext = 'png';
+      let isBase64 = false;
+      let base64Data = '';
+
+      if (q.gambarUrl.startsWith('data:')) {
+        const matches = q.gambarUrl.match(/^data:image\/([a-zA-Z0-9-+.]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          ext = matches[1] === 'jpeg' ? 'jpg' : matches[1].replace('+xml', '');
+          base64Data = matches[2];
+          isBase64 = true;
+        }
+      }
+
+      imageFilename = `soal_${String(qNum).padStart(2, '0')}_gambar.${ext}`;
+
+      if (isBase64 && imagesFolder) {
+        imagesFolder.file(imageFilename, base64Data, { base64: true });
+        extractedImagesList.push({
+          noSoal: qNum,
+          filename: `gambar_soal/${imageFilename}`,
+          caption: q.gambarCaption
+        });
+      }
+    }
+
+    let bentukStr = "Pilihan Ganda";
+    if (q.bentukSoal === 'mcma') {
+      bentukStr = "Pilihan Ganda Kompleks";
+    } else if (q.bentukSoal === 'kategori') {
+      bentukStr = "Pilihan Ganda Kompleks Kategori";
+    } else if (q.bentukSoal === 'uraian' || q.bentukSoal === 'esai') {
+      bentukStr = "Uraian";
+    }
+
+    let questionText = (q.soal || '').trim();
+    if (q.stimulus && q.stimulus.trim()) {
+      questionText = `${q.stimulus.trim()}<br/><br/>${questionText}`;
+    }
+
+    const formattedOptions = buildCbtOptions(q);
+
+    return {
+      id: qNum,
+      noSoal: qNum,
+      kodeGuru: authorCode || "GURU01",
+      mapel: mataPelajaran || "Sosiologi",
+      kompetensi: q.kompetensi || q.subKompetensi || "Kompetensi Utama",
+      subTopik: q.subKompetensi || q.kompetensi || "Sub Topik",
+      subKompetensi: q.subKompetensi || "",
+      bentukSoal: bentukStr,
+      poin: 10,
+      question: questionText,
+      soal: q.soal || '',
+      stimulus: q.stimulus || '',
+      image: q.gambarUrl || null,
+      gambarUrl: q.gambarUrl || null,
+      fileGambar: imageFilename ? `gambar_soal/${imageFilename}` : null,
+      gambarCaption: q.gambarCaption || '',
+      options: formattedOptions,
+      opsi: q.opsi || [],
+      kunciJawaban: q.kunciJawaban || '',
+      explanation: q.pembahasan || '',
+      pembahasan: q.pembahasan || '',
+      isActive: true
+    };
+  });
+
+  const fullJsonData = {
+    format: "CBT_GURU_BANK_SOAL_JSON_FULL",
+    version: "2.0",
+    exportedAt: new Date().toISOString(),
+    author: authorCode || "GURU01",
+    kodeGuru: authorCode || "GURU01",
+    mapel: mataPelajaran || "Sosiologi",
+    totalQuestions: questions.length,
+    hasImages: questions.some(q => Boolean(q.gambarUrl)),
+    questions: processedQuestions
+  };
+
+  zip.file("soal_dan_gambar.json", JSON.stringify(fullJsonData, null, 2));
+
+  let readmeText = `=======================================================\n`;
+  readmeText += `PAKET EKSPOR SOAL + GAMBAR CBT GURU (FORMAT JSON & ASSET)\n`;
+  readmeText += `=======================================================\n`;
+  readmeText += `Mata Pelajaran : ${mataPelajaran}\n`;
+  readmeText += `Nama Asesmen   : ${examName}\n`;
+  readmeText += `Tanggal Ekspor : ${new Date().toLocaleDateString('id-ID')}\n`;
+  readmeText += `Total Soal     : ${questions.length} Butir Soal\n`;
+  readmeText += `Total Gambar   : ${extractedImagesList.length} Gambar/Ilustrasi\n\n`;
+  readmeText += `ISI FILE DALAM PAKET ZIP INI:\n`;
+  readmeText += `1. soal_dan_gambar.json - File JSON lengkap format CBT Guru (beserta image base64, options A-E, explanation, dll).\n`;
+  readmeText += `2. gambar_soal/         - Folder berisi file gambar terpisah (PNG/JPG) yang siap digunakan untuk media cetak/CBT.\n\n`;
+  readmeText += `DAFTAR SOAL BERGAMBAR:\n`;
+  if (extractedImagesList.length > 0) {
+    extractedImagesList.forEach(item => {
+      readmeText += `- Soal No. ${item.noSoal}: ${item.filename}${item.caption ? ` ("${item.caption}")` : ''}\n`;
+    });
+  } else {
+    readmeText += `(Tidak ada gambar pada paket soal ini)\n`;
+  }
+
+  zip.file("README_INFO_SOAL.txt", readmeText);
+
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(zipBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Paket_Soal_CBT_Gambar_${safeSubject}_${timestamp}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Helper to parse imported JSON file content (CBT Guru or internal format) into Question[]
+ */
+export function parseQuestionsFromJSONFile(jsonText: string): Question[] {
+  const data = JSON.parse(jsonText);
+  let rawList: any[] = [];
+  if (Array.isArray(data)) {
+    rawList = data;
+  } else if (data && Array.isArray(data.questions)) {
+    rawList = data.questions;
+  } else if (data && Array.isArray(data.soalList)) {
+    rawList = data.soalList;
+  } else {
+    throw new Error("Format JSON tidak valid. File JSON harus berisi array soal atau objek dengan properti 'questions'.");
+  }
+
+  return rawList.map((item, idx) => {
+    // Map options and kunciJawaban if options array exists (CBT Guru format)
+    let opsiList: string[] = [];
+    let kunciStr = item.kunciJawaban || '';
+
+    if (Array.isArray(item.options) && item.options.length > 0) {
+      opsiList = item.options.map((o: any) => o.text || o.teks || '');
+      const correctOpts = item.options.filter((o: any) => o.isCorrect === true).map((o: any) => o.id);
+      if (correctOpts.length > 0 && !kunciStr) {
+        kunciStr = correctOpts.join(', ');
+      }
+    } else if (Array.isArray(item.opsi)) {
+      opsiList = item.opsi;
+    }
+
+    // Map bentukSoal
+    let bentukStr = item.bentukSoal || 'pilihan_ganda_sederhana';
+    const bLower = (item.bentukSoal || '').toLowerCase();
+    if (bLower.includes('kategori')) {
+      bentukStr = 'kategori';
+    } else if (bLower.includes('kompleks') || bLower.includes('mcma')) {
+      bentukStr = 'mcma';
+    } else if (bLower.includes('uraian') || bLower.includes('esai')) {
+      bentukStr = 'uraian';
+    } else if (bLower.includes('pilihan ganda')) {
+      bentukStr = 'pilihan_ganda_sederhana';
+    }
+
+    // Image URL or base64 data
+    const imgUrl = item.image || item.gambarUrl || item.gambar?.url || undefined;
+
+    return {
+      id: String(item.id || `question-imported-${Date.now()}-${idx}`),
+      noSoal: Number(item.noSoal || item.id || idx + 1),
+      kisiKisiId: item.kisiKisiId || '',
+      kompetensi: item.kompetensi || '',
+      subKompetensi: item.subTopik || item.subKompetensi || '',
+      bentukSoal: bentukStr,
+      shapes: item.shapes || '',
+      soal: item.soal || item.question || item.teksSoal || '',
+      stimulus: item.stimulus || '',
+      opsi: opsiList,
+      kunciJawaban: kunciStr,
+      pembahasan: item.explanation || item.pembahasan || '',
+      kataKunci: item.kataKunci || '',
+      gambarUrl: imgUrl,
+      gambarCaption: item.gambarCaption || item.gambar?.caption || undefined,
+      gambarPosisi: item.gambarPosisi || item.gambar?.posisi || 'center',
+      gambarUkuran: item.gambarUkuran || item.gambar?.ukuran || 'medium'
+    };
+  });
 }
 
 
